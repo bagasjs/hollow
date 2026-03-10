@@ -18,7 +18,8 @@ Bowl is a simple micro library for parsing HTML all in a single file
 and with no dependencies other than the Python Standard Library.
 
 Copyright (c) 2025, bagasjs
-License: MIT (see the details at the very bottom)
+License: MIT 
+Source: https://github.com/bagasjs/pymicrolib)
 """
 from typing import List, Dict, Any, Optional, Union
 from html.parser import HTMLParser
@@ -36,6 +37,8 @@ class DOMNode(object):
     _id_to_node_map: Dict[str, DOMNode]
     _tag_to_node_map: Dict[str, List[DOMNode]]
     _class_to_node_map: Dict[str, List[DOMNode]]
+    _attrs_to_node_map: Dict[str, Dict[str, List[DOMNode]]]
+
     _has_id_index: bool
     _has_tag_index: bool
     _has_class_index: bool
@@ -53,6 +56,8 @@ class DOMNode(object):
 
         self._has_class_index = False
         self._class_to_node_map = {}
+
+        self._attrs_to_node_map = {}
 
     def append_child(self, child: Union[DOMNode, str]):
         self.children.append(child)
@@ -95,6 +100,20 @@ class DOMNode(object):
                 self._build_tag_index(child)
         if node is self:
             self._has_tag_index = True
+
+    def _build_attrs_index(self, attr_name: str, node: DOMNode):
+        if attr_name not in self._attrs_to_node_map:
+            self._attrs_to_node_map[attr_name] = {}
+
+        attr_value = node.attrs.get(attr_name)
+        if attr_value:
+            if attr_value not in self._attrs_to_node_map[attr_name]:
+                self._attrs_to_node_map[attr_name][attr_value] = []
+            self._attrs_to_node_map[attr_name][attr_value].append(node) 
+
+        for child in node.children:
+            if isinstance(child, DOMNode):
+                self._build_attrs_index(attr_name, child)
 
     # TODO: since this is recursion maybe recursion unwrapping would be nice
     #       Look at https://github.com/bagasjs/algo-impl/blob/main/traversal.py
@@ -149,6 +168,25 @@ class DOMNode(object):
         if not self._has_class_index:
             self._build_class_index(self)
         return self._class_to_node_map.get(name)
+
+    def get_by_class_names(self, names: List[str]) -> Optional[List[DOMNode]]:
+        if not self._has_class_index:
+            self._build_class_index(self)
+        if not names:
+            return []
+        # Start with the set of nodes from the first class
+        base_nodes = self._class_to_node_map.get(names[0], [])
+        result_set = set(base_nodes)
+        # Intersect with nodes from each subsequent class
+        for class_name in names[1:]:
+            nodes = self._class_to_node_map.get(class_name, [])
+            result_set.intersection_update(nodes)
+        return list(result_set) if result_set else []
+
+    def get_by_attr(self, attr_name: str, attr_value: str) -> Optional[List[DOMNode]]:
+        if attr_name not in self._attrs_to_node_map:
+            self._build_attrs_index(attr_name, self)
+        return self._attrs_to_node_map[attr_name].get(attr_value)
 
 class DOMDocument(object):
     root: DOMNode
@@ -313,6 +351,7 @@ for example_app() function.
 
 Copyright (c) 2025, bagasjs
 License: MIT (see the details at the very bottom)
+Source: https://github.com/bagasjs/pymicrolib
 """
 
 from typing import Callable, List, Dict, Any, Tuple
@@ -603,8 +642,20 @@ class HollowViewer(object):
 ###########################################################
 HOLLOW_ADAPTERS_DIR = "hollow_adapters"
 HOLLOW_LIBRARY_DIR = "hollow_library"
-
 ADAPTERS = {}
+
+def load_adapters():
+    if os.path.exists(HOLLOW_ADAPTERS_DIR):
+        for fname in os.listdir(HOLLOW_ADAPTERS_DIR):
+            if fname.endswith(".py") and not fname.startswith("_"):
+                path = os.path.join(HOLLOW_ADAPTERS_DIR, fname)
+                with open(path, "r") as file:
+                    local_ns = {}
+                    exec(file.read(), globals(), local_ns)
+                    for _, item in local_ns.items():
+                        if inspect.isclass(item) and issubclass(item, Adapter) and item is not Adapter:
+                            instance = item()
+                            ADAPTERS[instance.get_name()] = instance
 
 def run_list_adapters_command(command: Command, args: list[str], opts: dict[str, Any]):
     print("List of available adapters:")
@@ -651,7 +702,7 @@ def run_search_command(command: Command, args: list[str], opts: dict[str, Any]):
 
     results = []
     for adapter_name, adapter_instance in ADAPTERS.items():
-        print(f"Query using: {adapter_name} ({adapter_instance})")
+        print(f"Query using: {adapter_name}")
 
         mangas, ok = adapter_instance.search_by_title(client, title=query)
         if not ok:
@@ -666,17 +717,7 @@ def run_serve_command(command: Command, args: list[str], opts: dict[str, Any]):
     pass
 
 def main():
-    if os.path.exists(HOLLOW_ADAPTERS_DIR):
-        for fname in os.listdir(HOLLOW_ADAPTERS_DIR):
-            if fname.endswith(".py") and not fname.startswith("_"):
-                path = os.path.join(HOLLOW_ADAPTERS_DIR, fname)
-                with open(path, "r") as file:
-                    local_ns = {}
-                    exec(file.read(), globals(), local_ns)
-                    for name, item in local_ns.items():
-                        if inspect.isclass(item) and issubclass(item, Adapter) and item is not Adapter:
-                            instance = item()
-                            ADAPTERS[instance.get_name()] = instance
+    load_adapters()
 
     cli = Command(use="hollow", description="The Hollow Manga Reader")
     cli.add_subcommand(Command(
@@ -729,7 +770,8 @@ def main():
         description="Unpack all mangas in the .tar and register everything in the library directory"))
     cli.add_subcommand(Command(
         use="register",
-        description="Register a valid manga (directory)"))
+        description="Register a valid manga (directory)"
+        ))
 
     execute(cli)
 
